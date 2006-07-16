@@ -1,0 +1,35 @@
+#!/usr/bin/perl
+use strict;
+use Net::IRC3::Client;
+use Net::IRC3::Client::Connection;
+$Net::IRC3::Client::Connection::DEBUG = 1;
+
+my $c = AnyEvent->condvar;
+
+my $i = Net::IRC3::Client->new;
+
+my $pc = $i->connect ("irc.plan9.de", 6667);
+
+$pc->reg_cb (
+   irc_privmsg => sub {
+      my ($self, $msg) = @_;
+      if ($msg->{trailing} =~ m/net_irc3:\s*(.*)/) {
+         $pc->send_chan ("#test", "PRIVMSG", "yes?", "#test");
+      }
+   }
+);
+
+$pc->reg_cb (
+   disconnect => sub {
+      print "DISCOPNNECT!!!\n";
+   }
+);
+
+# these commands will queue until the connection
+# is completly registered and has a valid nick etc.
+$pc->send_srv ("JOIN", undef, "#test");
+$pc->send_chan ("#test", "PRIVMSG", "hi, i'm a bot!", "#test");
+
+$pc->register ("net_irc3", "net_irc3", "test bot");
+
+$c->wait;

@@ -1,0 +1,162 @@
+NAME
+    Net::IRC3 - An IRC Protocol module which is event system independend
+
+VERSION
+    Version 0.2
+
+SYNOPSIS
+       use Net::IRC3;
+
+       my $irc3 = new Net::IRC3;
+
+       my $con = $irc3->connect ("test.not.at.irc.net", 6667);
+
+       ...
+
+DESCRIPTION
+    Net::IRC3 itself is a simple building block for an IRC client. It
+    manages connections and parses and constructs IRC messages.
+
+    Net::IRC3 is *very* simple, if you don't want to care about all the
+    other things that a client still has to do (like replying to PINGs and
+    remembering who is on a channel), I recommend to read the
+    Net::IRC3::Client page instead.
+
+METHODS
+    new ()
+        This just creates a Net::IRC3 object, which is a management class
+        for creating and managing connections.
+
+    connect ($host, $port)
+        Tries to open a socket to the host $host and the port $port. If
+        successfull it will return a Net::IRC3::Connection object. If an
+        error occured it will die (use eval to catch the exception).
+
+    connections ()
+        Returns a key value list, where the key is "$host:$port" and the
+        value is the connection object. Only 'active' connections are
+        returned. That means, if a connection is terminated somehow, it will
+        also disappear from this list.
+
+    connection ($host, $port) or connection ("$host:$port")
+        Returns the Net::IRC3::Connection object for the $host $port pair.
+        If no such connection exists, undef is returned.
+
+FUNCTIONS
+    These are some utility functions that might come in handy when handling
+    the IRC protocol.
+
+    You can export these with eg.:
+
+       use Net::IRC3 qw/parse_irc_msg/;
+
+    parse_irc_msg ($ircline)
+        This method parses the $ircline, which is one line of the IRC
+        protocol without the trailing "\015\012".
+
+        It returns a hash which has the following entrys:
+
+        prefix
+            The message prefix.
+
+        command
+            The IRC command.
+
+        params
+            The parameters to the IRC command in a array reference, this
+            includes the trailing parameter (the one after the ':' or the
+            14th parameter).
+
+        trailing
+            This is set if there was a trailing parameter (the one after the
+            ':' or the 14th parameter).
+
+    mk_msg ($prefix, $command, $trailing, @params)
+        This function assembles a IRC message. The generated message will
+        look like (pseudo code!)
+
+           :<prefix> <command> <params> :<trail>
+
+        Please refer to RFC 2812 how IRC messages normally look like.
+
+        The prefix and the trailing string will be omitted if they are
+        "undef".
+
+        EXAMPLES:
+
+           mk_msg (undef, "PRIVMSG", "you suck!", "magnus");
+           # will return: "PRIVMSG magnus :you suck!\015\012"
+
+           mk_msg (undef, "JOIN", undef, "#test");
+           # will return: "JOIN #magnus\015\012"
+
+    split_prefix ($prefix)
+        This function splits an IRC user prefix as described by RFC 2817
+        into the three parts: nickname, user and host. Which will be
+        returned as a list with that order.
+
+        $prefix can also be a hash like it is returned by "parse_irc_msg".
+
+    prefix_nick ($prefix)
+        A shortcut to extract the nickname from the $prefix.
+
+        $prefix can also be a hash like it is returned by "parse_irc_msg".
+
+    prefix_user ($prefix)
+        A shortcut to extract the username from the $prefix.
+
+        $prefix can also be a hash like it is returned by "parse_irc_msg".
+
+    prefix_host ($prefix)
+        A shortcut to extract the hostname from the $prefix.
+
+        $prefix can also be a hash like it is returned by "parse_irc_msg".
+
+EXAMPLES
+    See the samples/ directory for some examples on how to use Net::IRC3.
+
+AUTHOR
+    Robin Redeker, "<elmex@ta-sa.org>"
+
+SEE ALSO
+    Net::IRC3::Connection
+
+    Net::IRC3::Client
+
+    RFC 2812 - Internet Relay Chat: Client Protocol
+
+BUGS
+    Please report any bugs or feature requests to "bug-net-irc3 at
+    rt.cpan.org", or through the web interface at
+    <http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Net-IRC3>. I will be
+    notified, and then you'll automatically be notified of progress on your
+    bug as I make changes.
+
+SUPPORT
+    You can find documentation for this module with the perldoc command.
+
+        perldoc Net::IRC3
+
+    You can also look for information at:
+
+    * AnnoCPAN: Annotated CPAN documentation
+        <http://annocpan.org/dist/Net-IRC3>
+
+    * CPAN Ratings
+        <http://cpanratings.perl.org/d/Net-IRC3>
+
+    * RT: CPAN's request tracker
+        <http://rt.cpan.org/NoAuth/Bugs.html?Dist=Net-IRC3>
+
+    * Search CPAN
+        <http://search.cpan.org/dist/Net-IRC3>
+
+ACKNOWLEDGEMENTS
+    Thanks to Marc Lehmann for the new AnyEvent module!
+
+COPYRIGHT & LICENSE
+    Copyright 2006 Robin Redker, all rights reserved.
+
+    This program is free software; you can redistribute it and/or modify it
+    under the same terms as Perl itself.
+
