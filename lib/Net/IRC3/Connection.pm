@@ -2,7 +2,7 @@ package Net::IRC3::Connection;
 use strict;
 use AnyEvent;
 use IO::Socket::INET;
-use Net::IRC3 qw/mk_msg parse_irc_msg/;
+use Net::IRC3::Util qw/mk_msg parse_irc_msg/;
 
 =head1 NAME
 
@@ -25,30 +25,63 @@ such as sending and receiving IRC messages.
 
 =cut
 
-package Net::IRC3::Connection;
-
-use strict;
-use AnyEvent;
-use IO::Socket::INET;
-use Net::IRC3 qw/parse_irc_msg mk_msg/;
-
 sub new
 {
   my $this = shift;
   my $class = ref($this) || $this;
 
   my $self = {
-     pirc => $_[0],
-     s => $_[1],
-     h => $_[2],
-     p => $_[3],
-     cbs => {},
+     cbs  => {},
      heap => {}
   };
 
   bless $self, $class;
 
   return $self;
+}
+
+=item B<connect ($host, $port)>
+
+Tries to open a socket to the host C<$host> and the port C<$port>.
+If an error occured it will die (use eval to catch the exception).
+
+=cut
+
+sub connect {
+   my ($self, $host, $port) = @_;
+
+   $self->{socket}
+      and return;
+
+   my $sock = IO::Socket::INET->new (
+      PeerAddr => $host,
+      PeerPort => $port,
+      Proto    => 'tcp',
+      Blocking => 0
+   ) or die "couldn't connect to irc server '$host:$port': $!\n";;
+
+   $self->{socket} = $sock;
+   $self->{host}   = $host;
+   $self->{port}   = $port;
+
+   $self->{rw} =
+      AnyEvent->io (poll => 'r', fh => $sock, cb => sub {
+         my $l = sysread $sock, my $data, 1024;
+
+         $self->feed_irc_data ($data);
+
+         unless ($l) {
+
+            if (defined $l) {
+               $self->disconnect ("EOF from IRC server '$host:$port'");
+               return;
+
+            } else {
+               $self->disconnect ("Error while reading from IRC server '$host:$port': $!");
+               return;
+            }
+         }
+      });
 }
 
 =item B<disconnect ($reason)>
@@ -65,10 +98,9 @@ sub disconnect {
 
    delete $self->{rw};
    delete $self->{ww};
-   delete $self->{pirc}->{connections}->{$self->{h} . ":" . $self->{p}};
-   delete $self->{pirc};
 
-   eval { $self->{s}->close }
+   eval { $self->{socket}->close };
+   delete $self->{socket};
 }
 
 =item B<heap ()>
@@ -86,19 +118,24 @@ sub heap {
 =item B<send_msg (@ircmsg)>
 
 This function sends a message to the server. C<@ircmsg> is the argumentlist
-for C<mk_msg>.
+for C<Net::IRC3::Util::mk_msg>.
 
 =cut
 
 sub send_msg {
    my ($self, @msg) = @_;
+
+   $self->event (sent => @msg);
+
+   $self->{socket} or return;
+
    my $data = mk_msg (@msg);
 
-   my ($host, $port) = ($self->{h}, $self->{p});
+   my ($host, $port) = ($self->{host}, $self->{port});
    $self->{outbuf} .= $data;
 
    unless (defined $self->{ww}) {
-      my $sock = $self->{s};
+      my $sock = $self->{socket};
       $self->{ww} =
          AnyEvent->io (poll => 'w', fh => $sock, cb => sub {
             my $l = syswrite $sock, $self->{outbuf};
@@ -109,18 +146,18 @@ sub send_msg {
 
             unless ($l) {
                # XXX: is this behaviour correct or ok?
-               $self->disconnect ("Error while writing to IRC server '$host:$port': $!");
+               $self->disconnect ("Error while writing to IRC server '$self->{host}:$self->{port}': $!");
                return;
             }
          });
    }
 }
 
-=item B<reg_cb ($cmd, $cb)>
+=item B<reg_cb ($cmd, $cb)> or B<reg_cb ($cmd1, $cb1, $cmd2, $cb2, ..., $cmdN, $cbN)>
 
 This registers a callback in the connection class.
 These callbacks will be called by internal events and
-by IRC protocol commands.
+by IRC protocol commands. You can also specify multiple callback registrations.
 
 The first argument to the callbacks is always the connection object
 itself.
@@ -132,7 +169,7 @@ NOTE: I<A callback has to return true to stay alive>
 If C<$cmd> starts with 'irc_' the callback C<$cb> will be registered
 for a IRC protocol command. The command is the suffix of C<$cmd> then.
 The second argument to the callback is the message hash reference
-that has the layout that is returned by C<parse_irc_msg>.
+that has the layout that is returned by C<Net::IRC3::Util::parse_irc_msg>.
 
 With the special C<$cmd> 'irc_*' the callback will be called on I<any>
 IRC command that is received.
@@ -160,22 +197,35 @@ It will also be emitted when C<disconnect> is called.
 The second argument to the callback is C<$reason>, a string that contains
 a clue about why the connection terminated.
 
-After this event the connection will be invalid and shouldn't be used any further.
-If you want to reestablish a connection, call C<connect> on the manage object (C<Net::IRC3>)
-again.
+If you want to reestablish a connection, call C<connect> again.
+
+=item B<sent @ircmsg>
+
+Emitted when a message (C<@ircmsg>) was sent to the server.
+C<@ircmsg> are the arguments to C<Net::IRC3::Util::mk_msg>.
+
+=item B<'*' $msg>
+=item B<read $msg>
+
+Emitted when a message (C<$msg>) was read from the server.
+C<$msg> is the hash reference returned by C<Net::IRC3::Util::parse_irc_msg>;
 
 =back
 
 =cut
 
 sub reg_cb {
-   my ($self, $cmd, $cb) = @_;
+   my ($self, %regs) = @_;
 
-   if ($cmd =~ m/^irc_(\S+)/i) {
-      push @{$self->{cbs}->{lc $1}}, $cb;
+   for my $cmd (keys %regs) {
+      my $cb = $regs{$cmd};
 
-   } else {
-      push @{$self->{events}->{$cmd}}, $cb;
+      if ($cmd =~ m/^irc_(\S+)/i) {
+         push @{$self->{cbs}->{lc $1}}, $cb;
+
+      } else {
+         push @{$self->{events}->{$cmd}}, $cb;
+      }
    }
 
    1;
@@ -223,6 +273,8 @@ sub feed_irc_data {
    for (@msg) {
       my $m = parse_irc_msg ($_);
 
+      $self->event (read => $m);
+
       my $nxt = [];
 
       for (@{$self->{cbs}->{lc $m->{command}}}) {
@@ -252,9 +304,11 @@ Robin Redeker, C<< <elmex@ta-sa.org> >>
 
 L<Net::IRC3>
 
+L<Net::IRC3::Client::Connection>
+
 =head1 COPYRIGHT & LICENSE
 
-Copyright 2006 Robin Redker, all rights reserved.
+Copyright 2006 Robin Redeker, all rights reserved.
 
 This program is free software; you can redistribute it and/or modify it
 under the same terms as Perl itself.

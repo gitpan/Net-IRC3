@@ -1,14 +1,13 @@
 #!/usr/bin/perl
 use strict;
-use Net::IRC3::Client;
 use Net::IRC3::Client::Connection;
 $Net::IRC3::Client::Connection::DEBUG = 1;
 
 my $c = AnyEvent->condvar;
 
-my $i = Net::IRC3::Client->new;
+my $pc = Net::IRC3::Client::Connection->new;
 
-my $pc = $i->connect ("irc.plan9.de", 6667);
+$pc->connect ("irc.plan9.de", 6667);
 
 $pc->reg_cb (
    irc_privmsg => sub {
@@ -20,6 +19,29 @@ $pc->reg_cb (
 );
 
 $pc->reg_cb (
+   channel_add => sub {
+      my ($self, $chan, @nicks) = @_;
+      my $nick = join ",", @nicks;
+
+      print "$chan += $nick\n";
+      print "chans: " . (join ";", keys %{$self->channel_list}) ."\n";
+      print "nicks: " . (join ";", keys %{$self->channel_list ()->{$chan}}) ."\n";
+   },
+   channel_remove => sub {
+      my ($self, $chan, @nicks) = @_;
+      my $nick = join ",", @nicks;
+
+      print "$chan -= $nick\n";
+      print "chans: " . (join ";", keys %{$self->channel_list}) ."\n";
+      print "nicks: " . (join ";", keys %{$self->channel_list ()->{$chan}}) ."\n";
+   }
+);
+
+$pc->reg_cb (
+   registered => sub {
+      my ($self) = @_;
+      print "registered!\n";
+   },
    disconnect => sub {
       print "DISCOPNNECT!!!\n";
    }

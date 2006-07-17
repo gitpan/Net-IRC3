@@ -2,9 +2,11 @@ Changes
 MANIFEST
 Makefile.PL
 lib/Net/IRC3.pm
-lib/Net/IRC3/Client.pm
+lib/Net/IRC3/Util.pm
 lib/Net/IRC3/Client/Connection.pm
 lib/Net/IRC3/Connection.pm
+samples/test_connect
+samples/notify
 samples/netirc3cl
 samples/netirc3
 t/00-load.t

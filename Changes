@@ -1,9 +1,14 @@
 Revision history for Net-IRC3
 
+0.3
+        - Refactored the code: Remove Client.pm, and make the connections
+          to standalone objects.
+        - Added nickname tracing for channels
+
 0.2     Sun Jul 16 12:58:06 CEST 2006
-        Code got a little bit refactored and wrote documentation.
-        It seems ready for a first release.
+        - Code got a little bit refactored and wrote documentation.
+          It seems ready for a first release.
 
 0.1     Sat Jul 15 23:46:49 UTC 2006
-        First version, released on an unsuspecting world.
+        - First version, released on an unsuspecting world.
 

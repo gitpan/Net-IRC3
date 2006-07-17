@@ -1,13 +1,13 @@
 #!/usr/bin/perl
 use strict;
-use Net::IRC3;
+use Net::IRC3::Connection;
 $Net::IRC3::Client::DEBUG = 1;
 
 my $c = AnyEvent->condvar;
 
-my $irc = Net::IRC3->new;
+my $con = Net::IRC3::Connection->new;
 
-my $con = $irc->connect ("irc.plan9.de", 6667);
+$con->connect ("irc.plan9.de", 6667);
 
 my ($nick, $user, $real) = qw/BinDepp BinDepp depp/;
 
