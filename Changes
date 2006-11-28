@@ -1,6 +1,10 @@
 Revision history for Net-IRC3
 
-0.3
+0.4     Tue Nov 28 17:13:01 CET 2006
+        - fixed broken PONG reply before 001
+        - made channel_list return a empty hash instead undef when no channel is joined
+
+0.3     Mon Jul 17 13:43:13 UTC 2006
         - Refactored the code: Remove Client.pm, and make the connections
           to standalone objects.
         - Added nickname tracing for channels

@@ -4,7 +4,7 @@ use Exporter;
 our @ISA = qw/Exporter/;
 our @EXPORT_OK =
    qw(mk_msg parse_irc_msg split_prefix prefix_nick
-      decode_ctcp prefix_user prefix_host);
+      decode_ctcp filter_ctcp_text_attr prefix_user prefix_host);
 
 =head1 NAME
 
@@ -115,7 +115,7 @@ EXAMPLES:
    # will return: "PRIVMSG magnus :you suck!\015\012"
 
    mk_msg (undef, "JOIN", undef, "#test");
-   # will return: "JOIN #magnus\015\012"
+   # will return: "JOIN #test\015\012"
 
 =cut
 
@@ -137,26 +137,32 @@ sub mk_msg {
 }
 
 
-=item B<decode_ctcp ($ircmsg)> or B<decode_ctcp ($line)>
+=item B<decode_ctcp_req ($line)>
 
 =cut
 
 sub decode_ctcp {
-   my ($self, $msg) = @_;
-   my $line = ref $msg ? $msg->{trailing} : $msg;
-   my $msg = ref $msg ? $msg : { };
+   my ($line) = @_;
 
-   if ($line =~ m/^\001(.*?)\001$/) {
-      my $ctcpdata = $1;
-
-      # XXX: implement!
-
-   } else {
-      return { trailing => $line };
+   while ($line =~ /\G\001([^\001]*)\001/g) {
+      my $req = $1;
    }
 
+   $line =~ s/\001[^\001]*\001//g;
 
-   return $msg;
+   return $line;
+}
+
+# implemented after the below CTCP spec, but
+# doesnt seem to be used by anyone... so it's untested.
+sub filter_ctcp_text_attr {
+   my ($line, $cb) = @_;
+   $cb ||= sub { '' };
+   $line =~ s/\006([BVUSI])/{warn "FIL\n"; my $c = $cb->($1); defined $c ? $c : "\006$1"}/ieg;
+   $line =~ s/\006CA((?:I[0-9A-F]|#[0-9A-F]{3}){2})/{my $c = $cb->($1); defined $c ? $c : "\006CA$1"}/ieg;
+   $line =~ s/\006C([FB])(I[0-9A-F]|#[0-9A-F]{3})/{my $c = $cb->($1, $2); defined $c ? $c : "\006C$1$2"}/ieg;
+   $line =~ s/\006CX([AFB])/{my $c = $cb->($1); defined $c ? $c : "\006CX$1"}/ieg;
+   return $line;
 }
 
 =item B<split_prefix ($prefix)>
@@ -226,6 +232,9 @@ sub prefix_host {
 Robin Redeker, C<< <elmex@ta-sa.org> >>
 
 =head1 SEE ALSO
+
+Internet Relay Chat Client To Client Protocol from February 2, 1997
+http://www.invlogic.com/irc/ctcp.html
 
 RFC 2812 - Internet Relay Chat: Client Protocol
 

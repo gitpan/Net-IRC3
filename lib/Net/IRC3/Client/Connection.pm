@@ -166,7 +166,7 @@ are hash references which contain the joined nicks as key.
 
 sub channel_list {
    my ($self) = @_;
-   return $self->{channels};
+   return $self->{channels} || {};
 }
 
 =item B<send_srv ($command, $trailing, @params)>
@@ -330,7 +330,7 @@ sub welcome_cb {
 
 sub ping_cb {
    my ($self, $msg) = @_;
-   $self->send_srv ("PONG", $msg->{params}->[0]);
+   $self->send_msg (undef, "PONG", $msg->{params}->[0]);
 
    1;
 }
@@ -339,12 +339,16 @@ sub namereply_cb {
    my ($self, $msg) = @_;
    my @nicks = split / /, $msg->{trailing};
    push @{$self->{_tmp_namereply}}, @nicks;
+
+   1;
 }
 
 sub endofnames_cb {
    my ($self, $msg) = @_;
    my $chan = lc $msg->{params}->[1];
    $self->event (channel_add => $chan, map { s/^[@\+]//; $_ } @{delete $self->{_tmp_namereply}});
+
+   1;
 }
 
 sub join_cb {
@@ -388,6 +392,8 @@ sub quit_cb {
    for (keys %{$self->{channels}}) {
       $self->event (channel_remove => $_, $nick);
    }
+
+   1;
 }
 
 sub debug_cb {
@@ -398,6 +404,8 @@ sub debug_cb {
    print " params:";
    print (join ",", @$par);
    print "\n";
+
+   1;
 }
 
 =back
