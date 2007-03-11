@@ -5,6 +5,7 @@ use ExtUtils::MakeMaker;
 WriteMakefile(
     NAME                => 'Net::IRC3',
     AUTHOR              => 'Robin Redeker <elmex@ta-sa.org>',
+    LICENSE             => 'perl',
     VERSION_FROM        => 'lib/Net/IRC3.pm',
     ABSTRACT_FROM       => 'lib/Net/IRC3.pm',
     PL_FILES            => {},

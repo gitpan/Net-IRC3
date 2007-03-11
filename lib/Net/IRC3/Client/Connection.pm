@@ -1,6 +1,8 @@
 package Net::IRC3::Client::Connection;
 use base "Net::IRC3::Connection";
 use Net::IRC3::Util qw/prefix_nick/;
+use strict;
+no warnings;
 
 our $DEBUG;
 
@@ -47,6 +49,23 @@ that manages all the stuff that noone wants to implement again and again
 when handling with IRC. For example it PONGs the server or keeps track
 of the users on a channel.
 
+=head2 A NOTE TO CASE MANAGEMENT
+
+The case insensitivity of channelnames and nicknames can lead to headaches
+when dealing with IRC in an automated client which tracks channels and nicknames.
+
+I tried to preserve the case in all channel and nicknames
+Net::IRC3::Client::Connection passes to his user. But in the internal
+structures i'm using lower case for the channel names.
+
+The returned hash from C<channel_list> for example has the lower case of the
+joined channels as keys.
+
+But i tried to preserve the case in all events that are emitted.
+Please keep this in mind when handling the events.
+
+For example a user might joins #TeSt and parts #test later.
+
 =head1 EVENTS
 
 The following events are emitted by L<Net::IRC3::Client::Connection>.
@@ -70,6 +89,20 @@ get a RPL_NAMREPLY (see RFC2812).
 Emitted when C<@nicks> are removed from the channel C<$channel>,
 happens for example when they PART, QUIT or get KICKed.
 
+=item B<channel_change $channel $old_nick $new_nick $is_myself>
+
+Emitted when a nickname on a channel changes. This is emitted when a NICK
+change occurs from C<$old_nick> to C<$new_nick> give the application a chance
+to quickly analyze what channels were affected.  C<$is_myself> is true when
+youself was the one who changed the nick.
+
+=item B<channel_topic $channel $topic $who>
+
+This is emitted when the topic for a channel is discovered. C<$channel>
+is the channel for which C<$topic> is the current topic now.
+Which is set by C<$who>. C<$who> might be undefined when it's not known
+who set the channel topic.
+
 =item B<join $nick $channel $is_myself>
 
 Emitted when C<$nick> enters the channel C<$channel> by JOINing.
@@ -80,6 +113,11 @@ C<$is_myself> is true if youself are the one who JOINs.
 Emitted when C<$nick> PARTs the channel C<$channel>.
 C<$is_myself> is true if youself are the one who PARTs.
 C<$msg> is the PART message.
+
+=item B<nick_change $old_nick $new_nick $is_myself>
+
+Emitted when C<$old_nick> is renamed to C<$new_nick>.
+C<$is_myself> is true when youself was the one who changed the nick.
 
 =item B<quit $nick $msg>
 
@@ -95,11 +133,26 @@ C<$ircmsg> is the original IRC message hash like it is returned by C<parse_irc_m
 Emitted for NOTICE and PRIVMSG where the target C<$nick> (most of the time you) is a nick.
 C<$ircmsg> is the original IRC message hash like it is returned by C<parse_irc_msg>.
 
+=item B<error $code $message $ircmsg>
+
+Emitted when any error occurs. C<$code> is the 3 digit error id string from RFC
+2812 and C<$message> is a description of the error. C<$ircmsg> is the complete
+error irc message.
+
+You may use Net::IRC3::Util::rfc_code_to_name to convert C<$code> to the error
+name from the RFC 2812. eg.:
+
+   rfc_code_to_name ('471') => 'ERR_CHANNELISFULL'
+
 =back
 
 =head1 METHODS
 
 =over 4
+
+=item B<new>
+
+This constructor takes no arguments.
 
 =cut
 
@@ -109,6 +162,7 @@ sub new {
    my $self = $class->SUPER::new (@_);
    $self->reg_cb (irc_001     => \&welcome_cb);
    $self->reg_cb (irc_join    => \&join_cb);
+   $self->reg_cb (irc_nick    => \&nick_cb);
    $self->reg_cb (irc_part    => \&part_cb);
    $self->reg_cb (irc_kick    => \&kick_cb);
    $self->reg_cb (irc_quit    => \&quit_cb);
@@ -123,27 +177,67 @@ sub new {
       if $DEBUG;
    $self->reg_cb ('irc_*'     => \&anymsg_cb);
 
-   $self->reg_cb (channel_remove => \&channel_remove_event);
-   $self->reg_cb (channel_add    => \&channel_add_event);
+   $self->reg_cb (channel_remove => \&channel_remove_event_cb);
+   $self->reg_cb (channel_add    => \&channel_add_event_cb);
+   $self->reg_cb (disconnect     => \&disconnect_cb);
+
+   $self->reg_cb (irc_437        => \&change_nick_login_cb);
+   $self->reg_cb (irc_433        => \&change_nick_login_cb);
+
+   $self->reg_cb (irc_332        => \&rpl_topic_cb);
+   $self->reg_cb (irc_topic      => \&topic_change_cb);
+
+   $self->{def_nick_change} = $self->{nick_change} =
+      sub {
+         my ($old_nick) = @_;
+         "${old_nick}_"
+      };
 
    return $self;
 }
 
-=item B<register ($nick, $user, $real)>
+=item B<register ($nick, $user, $real, $server_pass)>
 
 Sends the IRC registration commands NICK and USER.
+If C<$server_pass> is passed also a PASS command is generated.
 
 =cut
 
 sub register {
-   my ($self, $nick, $user, $real) = @_;
-
-   $self->send_msg (undef, "NICK", undef, $nick);
-   $self->send_msg (undef, "USER", $real || $nick, $user || $nick, "*", "0");
+   my ($self, $nick, $user, $real, $pass) = @_;
 
    $self->{nick} = $nick;
    $self->{user} = $user;
    $self->{real} = $real;
+   $self->{server_pass} = $pass;
+
+   $self->send_msg (undef, "PASS", undef, $pass) if defined $pass;
+   $self->send_msg (undef, "NICK", undef, $nick);
+   $self->send_msg (undef, "USER", $real || $nick, $user || $nick, "*", "0");
+}
+
+=item B<set_nick_change_cb $callback>
+
+This method lets you modify the nickname renaming mechanism when registering
+the connection. C<$callback> is called with the current nickname as first
+argument when a ERR_NICKNAMEINUSE or ERR_UNAVAILRESOURCE error occurs on login.
+The returnvalue of C<$callback> will then be used to change the nickname.
+
+If C<$callback> is not defined the default nick change callback will be used
+again.
+
+The default callback appends '_' to the end of the nickname supplied in the
+C<register> routine.
+
+If the callback returns the same nickname that was given it the connection
+will be terminated.
+
+=cut
+
+sub set_nick_change_cb {
+   my ($self, $cb) = @_;
+   $cb = $self->{def_nick_change} unless defined $cb;
+   $self->{nick_change} = $cb;
 }
 
 =item B<nick ()>
@@ -157,16 +251,27 @@ on login.
 
 sub nick { $_[0]->{nick} }
 
+=item B<registered ()>
+
+Returns a true value when the connection has been registered successfull and
+you can send commands.
+
+=cut
+
+sub registered { $_[0]->{registered} }
+
 =item B<channel_list ()>
 
-This returns a hash reference. The keys are the currently joined channels. The values
-are hash references which contain the joined nicks as key.
+This returns a hash reference. The keys are the currently joined channels in lower case.
+The values are hash references which contain the joined nicks as key.
+
+NOTE: Future versions might preserve the case from the JOIN command to the channels.
 
 =cut
 
 sub channel_list {
    my ($self) = @_;
-   return $self->{channels} || {};
+   return $self->{channel_list} || {};
 }
 
 =item B<send_srv ($command, $trailing, @params)>
@@ -180,7 +285,7 @@ welcome (IRC command 001) from the server yet, the IRC message is queued until i
 sub send_srv {
    my ($self, @msg) = @_;
 
-   if ($self->{connected}) {
+   if ($self->registered) {
       $self->send_msg (undef, @msg);
 
    } else {
@@ -202,17 +307,26 @@ sub clear_srv_queue {
 
 =item B<send_chan ($channel, $command, $trailing, @params))>
 
-This function sends a message (constructed by C<mk_msg (undef, $command, $trailing, @params)>
-to the server, like C<send_srv> only that it will queue the messages if it hasn't joined the
-channel C<$channel> yet. The queued messages will be send once the connection successfully
-JOINed the C<$channel>.
+This function sends a message (constructed by C<mk_msg (undef, $command,
+$trailing, @params)> to the server, like C<send_srv> only that it will queue
+the messages if it hasn't joined the channel C<$channel> yet. The queued
+messages will be send once the connection successfully JOINed the C<$channel>.
+
+C<$channel> will be lowercased so that any case that comes from the server matches.
+(Yes, IRC handles upper and lower case as equal :-(
+
+Be careful with this, there are chances you might not join the channel you
+wanted to join. You may wanted to join #bla and the server redirects that
+and sends you that you joined #blubb. You may use C<clear_chan_queue> to
+remove the queue after some timeout after joining, so that you don't end up
+with a memory leak.
 
 =cut
 
 sub send_chan {
    my ($self, $chan, @msg) = @_;
 
-   if ($self->{channels}->{lc $chan}) {
+   if ($self->{channel_list}->{lc $chan}) {
       $self->send_msg (undef, @msg);
 
    } else {
@@ -244,43 +358,42 @@ sub _was_me {
 # Callbacks
 ################################################################################
 
-sub channel_remove_event {
+sub channel_remove_event_cb {
    my ($self, $chan, @nicks) = @_;
 
-   $chan = lc $chan;
    for my $nick (@nicks) {
-      $nick = lc $nick;
-
-      if ($nick eq lc $self->nick ()) {
-         delete $self->{chan_queue}->{$chan};
-         delete $self->{channels}->{$chan};
+      if (lc ($nick) eq lc ($self->nick ())) {
+         delete $self->{chan_queue}->{lc $chan};
+         delete $self->{channel_list}->{lc $chan};
          last;
       } else {
-         delete $self->{channels}->{$chan}->{$nick};
+         delete $self->{channel_list}->{lc $chan}->{$nick};
       }
    }
 
    1;
 }
 
-sub channel_add_event {
+sub channel_add_event_cb {
    my ($self, $chan, @nicks) = @_;
-   $chan = lc $chan;
 
    for my $nick (@nicks) {
-      $nick = lc $nick;
-
-      if ($nick eq lc $self->nick ()) {
-         for (@{$self->{chan_queue}->{$chan}}) {
+      if (lc ($nick) eq lc ($self->nick ())) {
+         for (@{$self->{chan_queue}->{lc $chan}}) {
             $self->send_msg (undef, @$_);
          }
+         $self->clear_chan_queue ($chan);
       }
 
-      $self->{channels}->{$chan}->{$nick} = 1;
+      $self->{channel_list}->{lc $chan}->{$nick} = 1;
    }
 
-
    1;
+}
+
+sub _filter_new_nicks_from_channel {
+   my ($self, $chan, @nicks) = @_;
+   grep { not exists $self->{channel_list}->{lc $chan}->{$_} } @nicks;
 }
 
 sub anymsg_cb {
@@ -288,13 +401,16 @@ sub anymsg_cb {
 
    my $cmd = lc $msg->{command};
 
-   if (    $cmd ne "privmsg" 
+   if (    $cmd ne "privmsg"
        and $cmd ne "notice"
        and $cmd ne "part"
        and $cmd ne "join"
-      ) 
+       and not ($cmd >= 400 and $cmd <= 599)
+      )
    {
       $self->event (statmsg => $msg);
+   } elsif ($cmd >= 400 and $cmd <= 599) {
+      $self->event (error => $msg->{command}, $msg->{trailing}, $msg);
    }
 
    1;
@@ -317,13 +433,14 @@ sub privmsg_cb {
 sub welcome_cb {
    my ($self, $msg) = @_;
 
-   $self->{connected} = 1;
-
-   $self->event ('registered');
+   $self->{registered} = 1;
 
    for (@{$self->{con_queue}}) {
       $self->send_msg (undef, @$_);
    }
+   $self->clear_srv_queue ();
+
+   $self->event ('registered');
 
    1;
 }
@@ -331,6 +448,34 @@ sub welcome_cb {
 sub ping_cb {
    my ($self, $msg) = @_;
    $self->send_msg (undef, "PONG", $msg->{params}->[0]);
+
+   1;
+}
+
+sub nick_cb {
+   my ($self, $msg) = @_;
+   my $nick = prefix_nick ($msg);
+   my $newnick = $msg->{params}->[0];
+   my $wasme = $self->_was_me ($msg);
+
+   if ($wasme) { $self->{nick} = $newnick }
+
+   my @chans;
+
+   for my $channame (keys %{$self->{channel_list}}) {
+      my $chan = $self->{channel_list}->{$channame};
+      if (exists $chan->{$nick}) {
+         delete $chan->{$nick};
+         $chan->{$newnick} = 1;
+
+         push @chans, $channame;
+      }
+   }
+
+   for (@chans) {
+      $self->event (channel_change => $_, $nick, $newnick, $wasme);
+   }
+   $self->event (nick_change => $nick, $newnick, $wasme);
 
    1;
 }
@@ -345,8 +490,13 @@ sub namereply_cb {
 
 sub endofnames_cb {
    my ($self, $msg) = @_;
-   my $chan = lc $msg->{params}->[1];
-   $self->event (channel_add => $chan, map { s/^[@\+]//; $_ } @{delete $self->{_tmp_namereply}});
+   my $chan = $msg->{params}->[1];
+   my @nicks =
+      $self->_filter_new_nicks_from_channel (
+         $chan, map { s/^[@\+%&]//; $_ } @{delete $self->{_tmp_namereply}}
+      );
+
+   $self->event (channel_add => $chan, @nicks) if @nicks;
 
    1;
 }
@@ -356,8 +506,8 @@ sub join_cb {
    my $chan = $msg->{params}->[0];
    my $nick = prefix_nick ($msg);
 
-   $self->event (join        => $nick, $chan, $self->_was_me ($msg));
    $self->event (channel_add => $chan, $nick);
+   $self->event (join        => $nick, $chan, $self->_was_me ($msg));
 
    1;
 }
@@ -389,8 +539,9 @@ sub quit_cb {
 
    $self->event (quit => $nick, $msg->{params}->[1]);
 
-   for (keys %{$self->{channels}}) {
-      $self->event (channel_remove => $_, $nick);
+   for (keys %{$self->{channel_list}}) {
+      $self->event (channel_remove => $_, $nick)
+         if $self->{channel_list}->{$_}->{$nick};
    }
 
    1;
@@ -399,13 +550,61 @@ sub quit_cb {
 sub debug_cb {
    my ($self, $msg) = @_;
    print "$self->{h}:$self->{p} > ";
-   my $par = delete $msg->{params};
-   print (join " ", map { $_ => $msg->{$_} } sort keys %$msg);
+   print (join " ", map { $_ => $msg->{$_} } grep { $_ ne 'params' } sort keys %$msg);
    print " params:";
-   print (join ",", @$par);
+   print (join ",", @{$msg->{params}});
    print "\n";
 
    1;
+}
+
+sub change_nick_login_cb {
+   my ($self, $msg) = @_;
+
+   unless ($self->registered) {
+      my $newnick = $self->{nick_change}->($self->nick);
+
+      if (lc $newnick eq lc $self->{nick}) {
+         $self->disconnect;
+         return 0;
+      }
+
+      $self->{nick} = $newnick;
+      $self->send_msg (undef, "NICK", undef, $newnick);
+   }
+
+   not ($self->registered) # kill the cb when registered
+}
+
+sub disconnect_cb {
+   my ($self) = @_;
+
+   for (keys %{$self->{channel_list}}) {
+      $self->event (channel_remove => $_, $self->nick)
+   }
+
+   1
+}
+
+sub rpl_topic_cb {
+   my ($self, $msg) = @_;
+   my $chan  = $msg->{params}->[1];
+   my $topic = $msg->{trailing};
+
+   $self->event (channel_topic => $chan, $topic);
+
+   1
+}
+
+sub topic_change_cb {
+   my ($self, $msg) = @_;
+   my $who   = prefix_nick ($msg);
+   my $chan  = $msg->{params}->[0];
+   my $topic = $msg->{trailing};
+
+   $self->event (channel_topic => $chan, $topic, $who);
+
+   1
 }
 
 =back

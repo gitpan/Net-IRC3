@@ -1,8 +1,35 @@
 Revision history for Net-IRC3
 
+0.5     Sun Mar 11 23:54:10 CET 2007
+        - added server password support
+        - fixed a bug with nick-changing
+        - added topic support
+        - fixed problem in prefix matching
+        - fixed a bug where channel_add was called with already
+          joined nicks, these duplicates are now prevented.
+        - found a bug in prefix_host with the tests
+        - added some tests
+        - disconnect now also does send channel_add/remove events
+        - enhanced connection handling a bit
+        - added connect and connect_error events to Net::IRC3::Connection
+        - fixed a bug where too many channel_remove events were generated on QUIT
+        - fixed case handling with channels
+        - added functionality to change the nick automatically
+          when it is already taken when registering an IRC connection.
+          (Net::IRC3::Client::Connection)
+        - added reply number <=> reply name mapping to Net::IRC3::Util
+          accessible through rfc_code_to_name
+        - added error event to Net::IRC3::Client::Connection
+        - fixed bugs in nick handling and added support for the NICK
+          change command in Net::IRC3::Client::Connection
+        - Net::IRC3::Client::Connection->channel_list now returns channel and nick
+          information in the servers cAsE.
+        - fixed a bug in send_srv and send_chan where messages
+          could have been sent twice.
+
 0.4     Tue Nov 28 17:13:01 CET 2006
         - fixed broken PONG reply before 001
-        - made channel_list return a empty hash instead undef when no channel is joined
+        - made channel_list return an empty hash instead undef when no channel is joined
 
 0.3     Mon Jul 17 13:43:13 UTC 2006
         - Refactored the code: Remove Client.pm, and make the connections

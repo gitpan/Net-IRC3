@@ -1,5 +1,6 @@
 Changes
 MANIFEST
+README
 Makefile.PL
 lib/Net/IRC3.pm
 lib/Net/IRC3/Util.pm
@@ -10,7 +11,7 @@ samples/notify
 samples/netirc3cl
 samples/netirc3
 t/00-load.t
-t/boilerplate.t
 t/pod-coverage.t
+t/boilerplate.t
 t/pod.t
 META.yml                                 Module meta-data (added by MakeMaker)

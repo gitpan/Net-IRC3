@@ -1,7 +1,10 @@
 package Net::IRC3::Connection;
 use strict;
+no warnings;
 use AnyEvent;
+use POSIX;
 use IO::Socket::INET;
+use IO::Handle;
 use Net::IRC3::Util qw/mk_msg parse_irc_msg/;
 
 =head1 NAME
@@ -23,6 +26,10 @@ such as sending and receiving IRC messages.
 
 =over 4
 
+=item B<new>
+
+This constructor does take no arguments.
+
 =cut
 
 sub new
@@ -32,7 +39,8 @@ sub new
 
   my $self = {
      cbs  => {},
-     heap => {}
+     heap => {},
+     outbuf => ''
   };
 
   bless $self, $class;
@@ -64,16 +72,69 @@ sub connect {
    $self->{host}   = $host;
    $self->{port}   = $port;
 
+   $self->{cw} =
+      AnyEvent->io (poll => 'w', fh => $self->{socket}, cb => sub {
+         my ($w) = @_;
+         # FIXME: handle EAGAIN ?
+         delete $self->{cw};
+
+         if ($! = $sock->sockopt (SO_ERROR)) {
+            $self->event ('connect_error' => $!);
+            $self->_clear_me;
+         } else {
+            $self->use_socket ($host, $port, $self->{socket});
+         }
+         0
+      });
+   1
+}
+
+=item B<use_socket ($host, $port, $socket)>
+
+This method can be used instead of C<connect> to handle IRC messages
+that are received and sent over the C<$socket>.
+
+In this case C<$host> and C<$port> are just documentation for the error messages.
+
+=cut
+
+sub use_socket {
+   my ($self, $host, $port, $socket) = @_;
+
+   $self->{host} = $host;
+   $self->{port} = $port;
+   $self->{socket} = $socket;
+   $socket->blocking (0);
+
+   $self->{connected} = 1;
+   $self->event ('connect');
+   $self->_start_reader;
+   $self->_start_writer;
+}
+
+sub _start_reader {
+   my ($self) = @_;
+   my ($host, $port) = ($self->{host}, $self->{port});
+
+   return if $self->{rw};
+   return unless $self->{socket};
+
    $self->{rw} =
-      AnyEvent->io (poll => 'r', fh => $sock, cb => sub {
-         my $l = sysread $sock, my $data, 1024;
+      AnyEvent->io (poll => 'r', fh => $self->{socket}, cb => sub {
+         my $data;
+         my $l = $self->{socket}->sysread ($data, 1024);
 
-         $self->feed_irc_data ($data);
-
-         unless ($l) {
-
-            if (defined $l) {
+         # FIXME: handle EAGAIN
+         if (defined $l) {
+            if ($l == 0) {
                $self->disconnect ("EOF from IRC server '$host:$port'");
+               return
+            } else {
+               $self->_feed_irc_data ($data);
+            }
+
+         } else {
+            if ($! == EAGAIN()) {
                return;
 
             } else {
@@ -82,6 +143,36 @@ sub connect {
             }
          }
       });
+}
+
+
+sub _start_writer {
+   my ($self) = @_;
+
+   return unless $self->{socket} && $self->{connected} && length ($self->{outbuf}) > 0;
+
+   my ($host, $port) = ($self->{host}, $self->{port});
+
+   unless (defined $self->{ww}) {
+      $self->{ww} =
+         AnyEvent->io (poll => 'w', fh => $self->{socket}, cb => sub {
+            my $l = syswrite $self->{socket}, $self->{outbuf};
+
+            if (defined $l) {
+               substr $self->{outbuf}, 0, $l, "";
+               if (length ($self->{outbuf}) == 0) { delete $self->{ww} }
+
+            } else {
+               if ($! == EAGAIN()) {
+
+                  return;
+               } else {
+                  $self->disconnect ("Error while writing to IRC server '$self->{host}:$self->{port}': $!");
+                  return;
+               }
+            }
+         });
+   }
 }
 
 =item B<disconnect ($reason)>
@@ -95,11 +186,31 @@ sub disconnect {
    my ($self, $reason) = @_;
 
    $self->event (disconnect => $reason);
+   $self->_clear_me;
+
+}
+
+=item B<is_connected>
+
+Returns true when this connection is connected.
+Otherwise false.
+
+=cut
+
+sub is_connected {
+   my ($self) = @_;
+   $self->{socket} && $self->{connected}
+}
+
+sub _clear_me {
+   my ($self) = @_;
+
+   delete $self->{connected};
 
    delete $self->{rw};
    delete $self->{ww};
+   delete $self->{cw};
 
-   eval { $self->{socket}->close };
    delete $self->{socket};
 }
 
@@ -115,6 +226,25 @@ sub heap {
    return $self->{heap};
 }
 
+=item B<send_raw ($ircline)>
+
+This method sends C<$ircline> straight to the server without any
+further processing done.
+
+=cut
+
+sub send_raw {
+   my ($self, $ircline) = @_;
+   $self->_send_raw ("$ircline\015\012");
+}
+
+sub _send_raw {
+   my ($self, $data) = @_;
+
+   $self->{outbuf} .= $data;
+   $self->_start_writer;
+}
+
 =item B<send_msg (@ircmsg)>
 
 This function sends a message to the server. C<@ircmsg> is the argumentlist
@@ -126,31 +256,7 @@ sub send_msg {
    my ($self, @msg) = @_;
 
    $self->event (sent => @msg);
-
-   $self->{socket} or return;
-
-   my $data = mk_msg (@msg);
-
-   my ($host, $port) = ($self->{host}, $self->{port});
-   $self->{outbuf} .= $data;
-
-   unless (defined $self->{ww}) {
-      my $sock = $self->{socket};
-      $self->{ww} =
-         AnyEvent->io (poll => 'w', fh => $sock, cb => sub {
-            my $l = syswrite $sock, $self->{outbuf};
-
-            substr $self->{outbuf}, 0, $l, "";
-
-            if (length ($self->{outbuf}) == 0) { delete $self->{ww} }
-
-            unless ($l) {
-               # XXX: is this behaviour correct or ok?
-               $self->disconnect ("Error while writing to IRC server '$self->{host}:$self->{port}': $!");
-               return;
-            }
-         });
-   }
+   $self->_send_raw (mk_msg (@msg));
 }
 
 =item B<reg_cb ($cmd, $cb)> or B<reg_cb ($cmd1, $cb1, $cmd2, $cb2, ..., $cmdN, $cbN)>
@@ -189,6 +295,14 @@ Following events are emitted by this module and shouldn't be emitted
 from a module user call to C<event>.
 
 =over 4
+
+=item B<connect>
+
+This event is generated when the socket was successfully connected.
+
+=item B<connect_error $error>
+
+This event is generated when the socket couldn't be connected successfully.
 
 =item B<disconnect $reason>
 
@@ -260,7 +374,7 @@ sub event {
 }
 
 # internal function, called by the read callbacks above.
-sub feed_irc_data {
+sub _feed_irc_data {
    my ($self, $data) = @_;
 
    $self->{buffer} .= $data;

@@ -1,5 +1,7 @@
-#!/usr/bin/perl
+#!/opt/perl/bin/perl
 use strict;
+use AnyEvent::Impl::Perl;
+use AnyEvent;
 use Net::IRC3::Connection;
 $Net::IRC3::Client::DEBUG = 1;
 
@@ -7,7 +9,6 @@ my $c = AnyEvent->condvar;
 
 my $con = Net::IRC3::Connection->new;
 
-$con->connect ("irc.plan9.de", 6667);
 
 my ($nick, $user, $real) = qw/BinDepp BinDepp depp/;
 
@@ -32,18 +33,27 @@ $con->reg_cb (welcome => sub {
 });
 
 my $t;
-$t = AnyEvent->timer (after => 2, cb => sub {
+$t = AnyEvent->timer (after => 10, cb => sub {
    $con->disconnect ("Timeout exceeded");
    undef $t;
 });
 
 # lets 
 $con->reg_cb (
+   connect => sub {
+      warn "Connected! Yay!\n";
+      1;
+   },
+   connect_error => sub {
+      warn "Connection error: $_[1]\n";
+      1;
+   },
    disconnect => sub {
       warn "Oh, got a disconnect: $_[1], exiting...\n";
-      exit 0;
       1;
    }
 );
+
+$con->connect ("localhost", 6667);
 
 $c->wait;

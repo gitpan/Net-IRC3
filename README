@@ -2,7 +2,7 @@ NAME
     Net::IRC3 - An event system independend IRC protocol module
 
 VERSION
-    Version 0.4
+    Version 0.5
 
 SYNOPSIS
     Using the simplistic Net::IRC3::Connection:
@@ -76,6 +76,8 @@ AUTHOR
     Robin Redeker, "<elmex@ta-sa.org>"
 
 SEE ALSO
+    Net::IRC3::Util
+
     Net::IRC3::Connection
 
     Net::IRC3::Client::Connection

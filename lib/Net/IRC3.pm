@@ -11,11 +11,11 @@ Net::IRC3 - An event system independend IRC protocol module
 
 =head1 VERSION
 
-Version 0.4
+Version 0.5
 
 =cut
 
-our $VERSION = '0.4';
+our $VERSION = '0.5';
 
 =head1 SYNOPSIS
 
@@ -92,6 +92,8 @@ See the samples/ directory for some examples on how to use Net::IRC3.
 Robin Redeker, C<< <elmex@ta-sa.org> >>
 
 =head1 SEE ALSO
+
+L<Net::IRC3::Util>
 
 L<Net::IRC3::Connection>
 
