@@ -1,10 +1,8 @@
 package Net::IRC3::Client::Connection;
 use base "Net::IRC3::Connection";
-use Net::IRC3::Util qw/prefix_nick/;
+use Net::IRC3::Util qw/prefix_nick decode_ctcp/;
 use strict;
 no warnings;
-
-our $DEBUG;
 
 =head1 NAME
 
@@ -44,10 +42,19 @@ Net::IRC3::Client::Connection - A highlevel IRC connection
 
 =head1 DESCRIPTION
 
-L<Net::IRC3::Client::Connection> is a highlevel client connection,
+B<NOTE:> This module is B<DEPRECATED>, please use L<AnyEvent::IRC> for new programs,
+and possibly port existing L<Net::IRC3> applications to L<AnyEvent::IRC>. Though the
+API of L<AnyEvent::IRC> has incompatible changes, it's still fairly similar.
+
+
+L<Net::IRC3::Client::Connection> is a (nearly) highlevel client connection,
 that manages all the stuff that noone wants to implement again and again
 when handling with IRC. For example it PONGs the server or keeps track
 of the users on a channel.
+
+Please note that CTCP handling is still up to you. It will be decoded
+for you and events will be generated. But generating replies
+is up to you.
 
 =head2 A NOTE TO CASE MANAGEMENT
 
@@ -78,16 +85,21 @@ event.
 
 Emitted when the connection got successfully registered.
 
-=item B<channel_add $channel @nicks>
+=item B<channel_add $msg, $channel @nicks>
 
 Emitted when C<@nicks> are added to the channel C<$channel>,
 this happens for example when someone JOINs a channel or when you
 get a RPL_NAMREPLY (see RFC2812).
 
-=item B<channel_remove $channel @nicks>
+C<$msg> ist he IRC message hash that as returned by C<parse_irc_msg>.
+
+=item B<channel_remove $msg, $channel @nicks>
 
 Emitted when C<@nicks> are removed from the channel C<$channel>,
 happens for example when they PART, QUIT or get KICKed.
+
+C<$msg> ist he IRC message hash that as returned by C<parse_irc_msg>
+or undef if the reason for the removal was a disconnect on our end.
 
 =item B<channel_change $channel $old_nick $new_nick $is_myself>
 
@@ -114,10 +126,36 @@ Emitted when C<$nick> PARTs the channel C<$channel>.
 C<$is_myself> is true if youself are the one who PARTs.
 C<$msg> is the PART message.
 
+=item B<part $kicked_nick $channel $is_myself $msg>
+
+Emitted when C<$kicked_nick> is KICKed from the channel C<$channel>.
+C<$is_myself> is true if youself are the one who got KICKed.
+C<$msg> is the PART message.
+
 =item B<nick_change $old_nick $new_nick $is_myself>
 
 Emitted when C<$old_nick> is renamed to C<$new_nick>.
 C<$is_myself> is true when youself was the one who changed the nick.
+
+=item B<ctcp $src, $target, $tag, $msg, $type>
+
+Emitted when a CTCP message was found in either a NOTICE or PRIVMSG
+message. C<$tag> is the CTCP message tag. (eg. "PING", "VERSION", ...).
+C<$msg> is the CTCP message and C<$type> is either "NOTICE" or "PRIVMSG".
+
+C<$src> is the source nick the message came from.
+C<$target> is the target nickname (yours) or the channel the ctcp was sent
+on.
+
+=item B<"ctcp_$tag", $src, $target, $msg, $type>
+
+Emitted when a CTCP message was found in either a NOTICE or PRIVMSG
+message. C<$tag> is the CTCP message tag (in lower case). (eg. "ping", "version", ...).
+C<$msg> is the CTCP message and C<$type> is either "NOTICE" or "PRIVMSG".
+
+C<$src> is the source nick the message came from.
+C<$target> is the target nickname (yours) or the channel the ctcp was sent
+on.
 
 =item B<quit $nick $msg>
 
@@ -128,10 +166,14 @@ Emitted when the nickname C<$nick> QUITs with the message C<$msg>.
 Emitted for NOTICE and PRIVMSG where the target C<$channel> is a channel.
 C<$ircmsg> is the original IRC message hash like it is returned by C<parse_irc_msg>.
 
+The trailing part of the C<$ircmsg> will have all CTCP messages stripped off.
+
 =item B<privatemsg $nick $ircmsg>
 
 Emitted for NOTICE and PRIVMSG where the target C<$nick> (most of the time you) is a nick.
 C<$ircmsg> is the original IRC message hash like it is returned by C<parse_irc_msg>.
+
+The trailing part of the C<$ircmsg> will have all CTCP messages stripped off.
 
 =item B<error $code $message $ircmsg>
 
@@ -143,6 +185,14 @@ You may use Net::IRC3::Util::rfc_code_to_name to convert C<$code> to the error
 name from the RFC 2812. eg.:
 
    rfc_code_to_name ('471') => 'ERR_CHANNELISFULL'
+
+=item B<debug_send $prefix $command $trailing @params>
+
+Is emitted everytime some command is sent.
+
+=item B<debug_recv $ircmsg>
+
+Is emitted everytime some command was received.
 
 =back
 
@@ -160,6 +210,8 @@ sub new {
    my $this = shift;
    my $class = ref($this) || $this;
    my $self = $class->SUPER::new (@_);
+
+   $self->reg_cb ('irc_*'     => \&debug_cb);
    $self->reg_cb (irc_001     => \&welcome_cb);
    $self->reg_cb (irc_join    => \&join_cb);
    $self->reg_cb (irc_nick    => \&nick_cb);
@@ -169,12 +221,11 @@ sub new {
    $self->reg_cb (irc_353     => \&namereply_cb);
    $self->reg_cb (irc_366     => \&endofnames_cb);
    $self->reg_cb (irc_ping    => \&ping_cb);
+   $self->reg_cb (irc_pong    => \&pong_cb);
 
    $self->reg_cb (irc_privmsg => \&privmsg_cb);
    $self->reg_cb (irc_notice  => \&privmsg_cb);
 
-   $self->reg_cb ('irc_*'     => \&debug_cb)
-      if $DEBUG;
    $self->reg_cb ('irc_*'     => \&anymsg_cb);
 
    $self->reg_cb (channel_remove => \&channel_remove_event_cb);
@@ -274,6 +325,18 @@ sub channel_list {
    return $self->{channel_list} || {};
 }
 
+=item B<send_msg (...)>
+
+See also L<Net::IRC3::Connection>.
+
+=cut
+
+sub send_msg {
+   my ($self, @a) = @_;
+   $self->event (debug_send => @a);
+   $self->SUPER::send_msg (@a);
+}
+
 =item B<send_srv ($command, $trailing, @params)>
 
 This function sends an IRC message that is constructed by C<mk_msg (undef, $command, $trailing, @params)> (see L<Net::IRC3::Util>).
@@ -345,6 +408,43 @@ sub clear_chan_queue {
    $self->{chan_queue}->{lc $chan} = [];
 }
 
+=item B<enable_ping ($interval, $cb)>
+
+This method enables a periodical ping to the server with an interval of
+C<$interval> seconds. If no PONG was received from the server until the next
+interval the connection will be terminated or the callback in C<$cb> will be called.
+
+(C<$cb> will have the connection object as it's first argument.)
+
+Make sure you call this method after the connection has been established.
+(eg. in the callback for the C<registered> event).
+
+=cut
+
+sub enable_ping {
+   my ($self, $int, $cb) = @_;
+
+   $self->{last_pong_recv} = 0;
+   $self->{last_ping_sent} = time;
+
+   $self->send_srv (PING => "Net::IRC3");
+
+   $self->{_ping_timer} =
+      AnyEvent->timer (after => $int, cb => sub {
+         if ($self->{last_pong_recv} < $self->{last_ping_sent}) {
+            delete $self->{_ping_timer};
+            if ($cb) {
+               $cb->($self);
+            } else {
+               $self->disconnect ("Server timeout");
+            }
+
+         } else {
+            $self->enable_ping ($int, $cb);
+         }
+      });
+}
+
 ################################################################################
 # Private utility functions
 ################################################################################
@@ -359,7 +459,7 @@ sub _was_me {
 ################################################################################
 
 sub channel_remove_event_cb {
-   my ($self, $chan, @nicks) = @_;
+   my ($self, $msg, $chan, @nicks) = @_;
 
    for my $nick (@nicks) {
       if (lc ($nick) eq lc ($self->nick ())) {
@@ -375,7 +475,7 @@ sub channel_remove_event_cb {
 }
 
 sub channel_add_event_cb {
-   my ($self, $chan, @nicks) = @_;
+   my ($self, $msg, $chan, @nicks) = @_;
 
    for my $nick (@nicks) {
       if (lc ($nick) eq lc ($self->nick ())) {
@@ -419,12 +519,23 @@ sub anymsg_cb {
 sub privmsg_cb {
    my ($self, $msg) = @_;
 
-   my $targ = $msg->{params}->[0];
-   if ($targ =~ m/^(?:[#+&]|![A-Z0-9]{5})/) {
-      $self->event (publicmsg => $targ, $msg);
+   my ($trail, $ctcp) = decode_ctcp ($msg->{trailing});
 
-   } else {
-      $self->event (privatemsg => $targ, $msg);
+   for (@$ctcp) {
+      $self->event (ctcp => prefix_nick ($msg), $msg->{params}->[0], $_->[0], $_->[1], $msg->{command});
+      $self->event ("ctcp_".lc ($_->[0]), prefix_nick ($msg), $msg->{params}->[0], $_->[1], $msg->{command});
+   }
+
+   $msg->{trailing} = $trail;
+
+   if ($msg->{trailing} ne '') {
+      my $targ = $msg->{params}->[0];
+      if ($targ =~ m/^(?:[#+&]|![A-Z0-9]{5})/) {
+         $self->event (publicmsg => $targ, $msg);
+
+      } else {
+         $self->event (privatemsg => $targ, $msg);
+      }
    }
 
    1;
@@ -449,6 +560,12 @@ sub ping_cb {
    my ($self, $msg) = @_;
    $self->send_msg (undef, "PONG", $msg->{params}->[0]);
 
+   1;
+}
+
+sub pong_cb {
+   my ($self, $msg) = @_;
+   $self->{last_pong_recv} = time;
    1;
 }
 
@@ -493,10 +610,10 @@ sub endofnames_cb {
    my $chan = $msg->{params}->[1];
    my @nicks =
       $self->_filter_new_nicks_from_channel (
-         $chan, map { s/^[@\+%&]//; $_ } @{delete $self->{_tmp_namereply}}
+         $chan, map { s/^[~@\+%&]//; $_ } @{delete $self->{_tmp_namereply}}
       );
 
-   $self->event (channel_add => $chan, @nicks) if @nicks;
+   $self->event (channel_add => $msg, $chan, @nicks) if @nicks;
 
    1;
 }
@@ -506,7 +623,7 @@ sub join_cb {
    my $chan = $msg->{params}->[0];
    my $nick = prefix_nick ($msg);
 
-   $self->event (channel_add => $chan, $nick);
+   $self->event (channel_add => $msg, $chan, $nick);
    $self->event (join        => $nick, $chan, $self->_was_me ($msg));
 
    1;
@@ -518,7 +635,7 @@ sub part_cb {
    my $nick = prefix_nick ($msg);
 
    $self->event (part           => $nick, $chan, $self->_was_me ($msg), $msg->{params}->[1]);
-   $self->event (channel_remove => $chan, $nick);
+   $self->event (channel_remove => $msg, $chan, $nick);
 
    1;
 }
@@ -528,7 +645,8 @@ sub kick_cb {
    my $chan        = $msg->{params}->[0];
    my $kicked_nick = $msg->{params}->[1];
 
-   $self->event (channel_remove => $chan, $kicked_nick);
+   $self->event (kick           => $kicked_nick, $chan, $self->_was_me ($msg), $msg->{params}->[1]);
+   $self->event (channel_remove => $msg, $chan, $kicked_nick);
 
    1;
 }
@@ -540,7 +658,7 @@ sub quit_cb {
    $self->event (quit => $nick, $msg->{params}->[1]);
 
    for (keys %{$self->{channel_list}}) {
-      $self->event (channel_remove => $_, $nick)
+      $self->event (channel_remove => $msg, $_, $nick)
          if $self->{channel_list}->{$_}->{$nick};
    }
 
@@ -549,11 +667,12 @@ sub quit_cb {
 
 sub debug_cb {
    my ($self, $msg) = @_;
-   print "$self->{h}:$self->{p} > ";
-   print (join " ", map { $_ => $msg->{$_} } grep { $_ ne 'params' } sort keys %$msg);
-   print " params:";
-   print (join ",", @{$msg->{params}});
-   print "\n";
+   $self->event (debug_recv => $msg);
+   #print "$self->{h}:$self->{p} > ";
+   #print (join " ", map { $_ => $msg->{$_} } grep { $_ ne 'params' } sort keys %$msg);
+   #print " params:";
+   #print (join ",", @{$msg->{params}});
+   #print "\n";
 
    1;
 }
@@ -580,7 +699,7 @@ sub disconnect_cb {
    my ($self) = @_;
 
    for (keys %{$self->{channel_list}}) {
-      $self->event (channel_remove => $_, $self->nick)
+      $self->event (channel_remove => undef, $_, $self->nick)
    }
 
    1

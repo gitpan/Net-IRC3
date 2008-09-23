@@ -2,7 +2,7 @@ NAME
     Net::IRC3 - An event system independend IRC protocol module
 
 VERSION
-    Version 0.5
+    Version 0.6
 
 SYNOPSIS
     Using the simplistic Net::IRC3::Connection:
@@ -55,15 +55,29 @@ SYNOPSIS
        $con->disconnect;
 
 DESCRIPTION
+    NOTE: This module is DEPRECATED, please use AnyEvent::IRC for new
+    programs, and possibly port existing Net::IRC3 applications to
+    AnyEvent::IRC. Though the API of AnyEvent::IRC has incompatible changes,
+    it's still fairly similar.
+
     The Net::IRC3 module consists of Net::IRC3::Connection,
     Net::IRC3::Client::Connection and Net::IRC3::Util. Net::IRC3 only
     contains this documentation. It manages connections and parses and
     constructs IRC messages.
 
-    Net::IRC3::Connection is *very* simple, if you don't want to care about
-    all the other things that a client still has to do (like replying to
-    PINGs and remembering who is on a channel), I recommend to read the
-    Net::IRC3::Client::Connection page instead.
+    Net::IRC3 can be viewed as toolbox for handling IRC connections and
+    communications. It won't do everything for you, and you still need to
+    know a few details of the IRC protocol.
+
+    Net::IRC3::Client::Connection is a more highlevel IRC connection that
+    already processes some messages for you and will generated some events
+    that are maybe useful to you. It will also do PING replies for you and
+    manage channels a bit.
+
+    Net::IRC3::Connection is a lowlevel connection that only connects to the
+    server and will let you send and receive IRC messages.
+    Net::IRC3::Connection does not imply any client behaviour, you could
+    also use it to implement an IRC server.
 
     Note that the *::Connection module uses AnyEvent as it's IO event
     subsystem. You can integrate them into any application with a event
@@ -100,16 +114,20 @@ SUPPORT
 
     You can also look for information at:
 
-    * AnnoCPAN: Annotated CPAN documentation
+    *   AnnoCPAN: Annotated CPAN documentation
+
         <http://annocpan.org/dist/Net-IRC3>
 
-    * CPAN Ratings
+    *   CPAN Ratings
+
         <http://cpanratings.perl.org/d/Net-IRC3>
 
-    * RT: CPAN's request tracker
+    *   RT: CPAN's request tracker
+
         <http://rt.cpan.org/NoAuth/Bugs.html?Dist=Net-IRC3>
 
-    * Search CPAN
+    *   Search CPAN
+
         <http://search.cpan.org/dist/Net-IRC3>
 
 ACKNOWLEDGEMENTS

@@ -5,8 +5,8 @@ use Exporter;
 our @ISA = qw/Exporter/;
 our @EXPORT_OK =
    qw(mk_msg parse_irc_msg split_prefix prefix_nick
-      decode_ctcp filter_ctcp_text_attr prefix_user prefix_host
-      rfc_code_to_name);
+      decode_ctcp encode_ctcp filter_ctcp_text_attr prefix_user prefix_host
+      rfc_code_to_name filter_colors);
 
 =head1 NAME
 
@@ -138,33 +138,108 @@ sub mk_msg {
   return $msg;
 }
 
+my @_ctcp_lowlevel_escape = ("\000", "0", "\012", "n", "\015", "r", "\020", "\020");
 
-=item B<decode_ctcp ($line)>
+sub unescape_lowlevel {
+   my ($data) = @_;
+   my %map = reverse @_ctcp_lowlevel_escape;
+   $data =~ s/\020(.)/defined $map{$1} ? $map{$1} : $1/ge;
+   $data
+}
 
-TODO
+sub escape_lowlevel {
+   my ($data) = @_;
+   my %map = @_ctcp_lowlevel_escape;
+   $data =~ s/([\000\012\015\020])/"\020$map{$1}"/ge;
+   $data
+}
+
+sub unescape_ctcp {
+   my ($data) = @_;
+   $data =~ s/\\(.)/$1 eq 'a' ? "\001" : ($1 eq "\\" ? "\\" : $1)/eg;
+   $data
+}
+
+sub escape_ctcp {
+   my ($data) = @_;
+   $data =~ s/([\\\001])/$1 eq "\001" ? "\\a" : "\\\\"/eg;
+   $data
+}
+
+=item B<decode_ctcp ($trailing)>
+
+This function decodes the C<$trailing> part of an IRC message.
+It will first unescape the lower layer, extract CTCP messages
+and then return a list with two elements: the line without the ctcp messages
+and an array reference which contains array references of CTCP messages.
+Those CTCP message array references will have the CTCP message tag as
+first element (eg. "VERSION") and the rest of the CTCP message as the second
+element.
 
 =cut
 
 sub decode_ctcp {
    my ($line) = @_;
 
+   $line = unescape_lowlevel ($line);
+   my @ctcp;
    while ($line =~ /\G\001([^\001]*)\001/g) {
-      my $req = $1;
+      my $msg = unescape_ctcp ($1);
+      my ($tag, $data) = split / /, $msg, 2;
+      push @ctcp, [$tag, $data];
    }
 
    $line =~ s/\001[^\001]*\001//g;
 
-   return $line;
+   return ($line, \@ctcp)
 }
 
-=item B<filter_ctcp_text_attr ($line, $cb)>
+=item B<encode_ctcp (@msg)>
 
-TODO
+This function encodes a ctcp message for the trailing part of a NOTICE
+or PRIVMSG. C<@msg> is an array of strings or array references.
+If an array reference occurs in the C<@msg> array it's first
+element will be interpreted as CTCP TAG (eg. one of PING, VERSION, .. whatever)
+the rest of the array ref will be appended to the tag and seperated by
+spaces.
+
+All parts of the message will be contatenated and lowlevel quoted.
+That means you can embed _any_ character from 0 to 255 in this message (thats
+what the lowlevel quoting allows).
 
 =cut
+
+sub encode_ctcp {
+   my (@args) = @_;
+   escape_lowlevel (
+      join "", map {
+         ref $_
+            ? "\001" . escape_ctcp (join " ", @$_) . "\001"
+            : $_
+      } @args
+   )
+}
+
+=item B<filter_colors ($line)>
+
+This function will filter out any mIRC colors and (most) ansi escape sequences.
+Unfortunately the mIRC color coding will destroy improper colored numbers. So this
+function may destroy the message in some occasions a bit.
+
+=cut
+
+sub filter_colors($) {
+   my ($line) = @_;
+   $line =~ s/\x1B\[.*?[\x00-\x1F\x40-\x7E]//g; # see ECMA-48 + advice by urxvt author
+   $line =~ s/\x03\d\d?(?:,\d\d?)?//g;          # see http://www.mirc.co.uk/help/color.txt
+   $line =~ s/[\x03\x16\x02\x1f\x0f]//g;        # see some undefined place :-)
+   $line
+}
+
+
 # implemented after the below CTCP spec, but
 # doesnt seem to be used by anyone... so it's untested.
-sub filter_ctcp_text_attr {
+sub filter_ctcp_text_attr_bogus {
    my ($line, $cb) = @_;
    return unless $cb;
    $line =~ s/\006([BVUSI])/{warn "FIL\n"; my $c = $cb->($1); defined $c ? $c : "\006$1"}/ieg;

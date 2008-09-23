@@ -1,5 +1,17 @@
 Revision history for Net-IRC3
 
+0.6	Tue Sep 23 12:42:11 CEST 2008
+        - deprecated this module, use AnyEvent::IRC in future!
+        - connect is done non blocking
+        - major semantic change: you can't reuse a connection object,
+          after the 'disconnect' event has been issued you have to recreate
+          it and reconnect the new object. All event handlers are cleared
+          after the 'disconnect' event has been issued too.
+        - major api change for channel_add and channel_remove
+        - added CTCP support
+        - implemented automatic pinging (on user request)
+          see Net::IRC3::Client::Connection::enable_ping
+
 0.5     Sun Mar 11 23:54:10 CET 2007
         - added server password support
         - fixed a bug with nick-changing

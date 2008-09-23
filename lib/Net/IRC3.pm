@@ -11,11 +11,11 @@ Net::IRC3 - An event system independend IRC protocol module
 
 =head1 VERSION
 
-Version 0.5
+Version 0.6
 
 =cut
 
-our $VERSION = '0.5';
+our $VERSION = '0.6';
 
 =head1 SYNOPSIS
 
@@ -70,14 +70,27 @@ Using the more sophisticatd L<Net::IRC3::Client::Connection>:
 
 =head1 DESCRIPTION
 
+B<NOTE:> This module is B<DEPRECATED>, please use L<AnyEvent::IRC> for new programs,
+and possibly port existing L<Net::IRC3> applications to L<AnyEvent::IRC>. Though the
+API of L<AnyEvent::IRC> has incompatible changes, it's still fairly similar.
+
 The L<Net::IRC3> module consists of L<Net::IRC3::Connection>, L<Net::IRC3::Client::Connection>
 and L<Net::IRC3::Util>. L<Net::IRC3> only contains this documentation.
 It manages connections and parses and constructs IRC messages.
 
-L<Net::IRC3::Connection> is I<very> simple, if you don't want to care about
-all the other things that a client still has to do (like replying to
-PINGs and remembering who is on a channel), I recommend to read
-the L<Net::IRC3::Client::Connection> page instead.
+L<Net::IRC3> can be viewed as toolbox for handling IRC connections
+and communications. It won't do everything for you, and you still
+need to know a few details of the IRC protocol.
+
+L<Net::IRC3::Client::Connection> is a more highlevel IRC connection
+that already processes some messages for you and will generated some
+events that are maybe useful to you. It will also do PING replies for you
+and manage channels a bit.
+
+L<Net::IRC3::Connection> is a lowlevel connection that only connects
+to the server and will let you send and receive IRC messages.
+L<Net::IRC3::Connection> does not imply any client behaviour, you could also
+use it to implement an IRC server.
 
 Note that the *::Connection module uses AnyEvent as it's IO event subsystem.
 You can integrate them into any application with a event system

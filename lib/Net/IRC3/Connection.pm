@@ -19,8 +19,16 @@ Net::IRC3::Connection - An IRC connection abstraction
 
 =head1 DESCRIPTION
 
+B<NOTE:> This module is B<DEPRECATED>, please use L<AnyEvent::IRC> for new programs,
+and possibly port existing L<Net::IRC3> applications to L<AnyEvent::IRC>. Though the
+API of L<AnyEvent::IRC> has incompatible changes, it's still fairly similar.
+
+
 The connection class. Here the actual interesting stuff can be done,
 such as sending and receiving IRC messages.
+
+Please note that CTCP support is available through the functions
+C<encode_ctcp> and C<decode_ctcp> provided by L<Net::IRC3::Util>.
 
 =head2 METHODS
 
@@ -212,6 +220,9 @@ sub _clear_me {
    delete $self->{cw};
 
    delete $self->{socket};
+
+   delete $self->{cbs};
+   delete $self->{events};
 }
 
 =item B<heap ()>
@@ -319,6 +330,7 @@ Emitted when a message (C<@ircmsg>) was sent to the server.
 C<@ircmsg> are the arguments to C<Net::IRC3::Util::mk_msg>.
 
 =item B<'*' $msg>
+
 =item B<read $msg>
 
 Emitted when a message (C<$msg>) was read from the server.
@@ -366,11 +378,11 @@ sub event {
 
    my $nxt = [];
 
-   for (@{$self->{events}->{lc $ev}}) {
+   for (@{$self->{events}->{$ev}}) {
       $_->($self, @arg) and push @$nxt, $_;
    }
 
-   $self->{events}->{lc $ev} = $nxt;
+   $self->{events}->{$ev} = $nxt;
 }
 
 # internal function, called by the read callbacks above.

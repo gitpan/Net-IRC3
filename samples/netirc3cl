@@ -1,5 +1,6 @@
 #!/usr/bin/perl
 use strict;
+use Event;
 use Net::IRC3::Client::Connection;
 $Net::IRC3::Client::Connection::DEBUG = 1;
 
@@ -41,9 +42,10 @@ $pc->reg_cb (
    registered => sub {
       my ($self) = @_;
       print "registered!\n";
+      $pc->enable_ping (2);
    },
    disconnect => sub {
-      print "DISCOPNNECT!!!\n";
+      print "DISCOPNNECT ($_[1])!!!\n";
    }
 );
 
